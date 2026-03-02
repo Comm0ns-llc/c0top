@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, TypedDict
 
@@ -755,7 +755,7 @@ class Database:
                 return self.client.table("bot_metadata").upsert({
                     "key": key,
                     "value": value,
-                    "updated_at": datetime.now().isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat()
                 }).execute()
             
             await self._execute_async(_upsert)
@@ -763,6 +763,65 @@ class Database:
             
         except Exception as e:
             logger.error(f"Failed to update metadata {key}: {e}")
+            return False
+
+    async def compare_and_set_metadata(
+        self,
+        key: str,
+        expected_value: str | None,
+        new_value: str,
+    ) -> bool:
+        """
+        メタデータをCompare-And-Setで更新
+
+        Args:
+            key: メタデータキー
+            expected_value: 現在値の期待値（Noneの場合は「キー未作成」を期待）
+            new_value: 更新後の値
+
+        Returns:
+            bool: 更新に成功して所有権を獲得した場合True
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            if expected_value is None:
+                # 初回のみ insert で作成（競合時は失敗扱い）
+                def _insert() -> Any:
+                    return self.client.table("bot_metadata").insert(
+                        {
+                            "key": key,
+                            "value": new_value,
+                            "updated_at": now_iso,
+                        }
+                    ).execute()
+
+                try:
+                    await self._execute_async(_insert)
+                    return True
+                except Exception:
+                    # 競合などで作成できなかった場合は、他インスタンス獲得とみなす
+                    return False
+
+            def _update_if_match() -> Any:
+                return (
+                    self.client.table("bot_metadata")
+                    .update(
+                        {
+                            "value": new_value,
+                            "updated_at": now_iso,
+                        }
+                    )
+                    .eq("key", key)
+                    .eq("value", expected_value)
+                    .execute()
+                )
+
+            result = await self._execute_async(_update_if_match)
+            updated_rows = getattr(result, "data", None) or []
+            return bool(updated_rows)
+
+        except Exception as e:
+            logger.error(f"Failed to compare_and_set metadata {key}: {e}")
             return False
 
     async def reset_weekly_scores(self) -> bool:

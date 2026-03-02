@@ -60,6 +60,8 @@ class Storage(Protocol):
 
     async def update_metadata(self, key: str, value: str) -> bool: ...
 
+    async def compare_and_set_metadata(self, key: str, expected_value: str | None, new_value: str) -> bool: ...
+
     async def reset_weekly_scores(self) -> bool: ...
 
 
@@ -137,6 +139,13 @@ class SupabaseStorage:
 
     async def update_metadata(self, key: str, value: str) -> bool:
         return await self._db.update_metadata(key=key, value=value)
+
+    async def compare_and_set_metadata(self, key: str, expected_value: str | None, new_value: str) -> bool:
+        return await self._db.compare_and_set_metadata(
+            key=key,
+            expected_value=expected_value,
+            new_value=new_value,
+        )
 
     async def reset_weekly_scores(self) -> bool:
         return await self._db.reset_weekly_scores()
@@ -332,6 +341,14 @@ class MemoryStorage:
     async def update_metadata(self, key: str, value: str) -> bool:
         async with self._lock:
             self._metadata[key] = value
+            return True
+
+    async def compare_and_set_metadata(self, key: str, expected_value: str | None, new_value: str) -> bool:
+        async with self._lock:
+            current = self._metadata.get(key)
+            if current != expected_value:
+                return False
+            self._metadata[key] = new_value
             return True
 
     async def reset_weekly_scores(self) -> bool:

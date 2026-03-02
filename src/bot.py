@@ -135,11 +135,19 @@ class QualityBot(commands.Bot):
                 success = await storage.reset_weekly_scores()
                 
                 if success:
-                    # 成功したらメタデータを更新
-                    await storage.update_metadata("last_weekly_reset_week", current_week)
-                    logger.info("Weekly leaderboard reset completed.")
-                    
-                    await storage.update_metadata("last_weekly_reset_week", current_week)
+                    # メタデータをCAS更新できたインスタンスだけ通知を送る
+                    claimed = await storage.compare_and_set_metadata(
+                        key="last_weekly_reset_week",
+                        expected_value=last_reset_week,
+                        new_value=current_week,
+                    )
+                    if not claimed:
+                        logger.info(
+                            "Weekly reset already finalized by another worker (week=%s). Skip notification.",
+                            current_week,
+                        )
+                        return
+
                     logger.info("Weekly leaderboard reset completed.")
                     
                     # 通知チャンネルがあれば通知を送る
