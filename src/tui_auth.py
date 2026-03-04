@@ -42,40 +42,6 @@ DEFAULT_AUTH_TIMEOUT = 180
 DEFAULT_AUTH_PORT = 53682
 SESSION_DIR_NAME = ".comm0ns_dashboard"
 SESSION_FILE_NAME = "session.json"
-LOGIN_COMPLETE_PAGE = """<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8" />
-  <title>Comm0ns Login</title>
-</head>
-<body>
-  <p id="msg">認証を処理しています...</p>
-  <script>
-    const msg = document.getElementById("msg");
-    const payload = {};
-    const hashParams = new URLSearchParams(window.location.hash.slice(1));
-    const queryParams = new URLSearchParams(window.location.search.slice(1));
-    hashParams.forEach((v, k) => { payload[k] = v; });
-    queryParams.forEach((v, k) => { payload[k] = v; });
-
-    fetch("http://127.0.0.1:53682/auth/complete", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload),
-    }).then((res) => {
-      if (!res.ok) throw new Error("Server returned " + res.status);
-      msg.textContent = "認証成功。タブを閉じます...";
-      setTimeout(() => {
-        window.open("", "_self");
-        window.close();
-      }, 250);
-    }).catch((err) => {
-      msg.textContent = "認証処理に失敗しました: " + err;
-    });
-  </script>
-</body>
-</html>
-"""
 
 
 class AuthError(RuntimeError):
@@ -199,6 +165,46 @@ def _make_oauth_handler(state: OAuthState) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:
             return
 
+        def build_completion_html(self, auth_data: dict[str, str]) -> str:
+            # Use the actual listening port so callback works even when TUI_AUTH_PORT is changed.
+            port = self.server.server_port
+            payload_json = json.dumps(auth_data, ensure_ascii=False)
+            return f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Comm0ns Login</title>
+</head>
+<body>
+  <p id="status">認証処理中...</p>
+  <script>
+    const status = document.getElementById("status");
+    const PORT = {port};
+    const payload = {payload_json};
+
+    // Keep compatibility with providers that return tokens in query/hash.
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    const queryParams = new URLSearchParams(window.location.search.slice(1));
+    hashParams.forEach((v, k) => {{ payload[k] = v; }});
+    queryParams.forEach((v, k) => {{ payload[k] = v; }});
+
+    fetch("http://127.0.0.1:" + PORT + "/auth/complete", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify(payload),
+    }})
+      .then((res) => {{
+        if (!res.ok) throw new Error("Server returned " + res.status);
+        status.textContent = "認証完了！このタブを閉じてください。";
+      }})
+      .catch((err) => {{
+        status.textContent = "CLIとの通信に失敗しました（ポート: " + PORT + "） " + err;
+      }});
+  </script>
+</body>
+</html>
+"""
+
         def _write_html(self, status: int, html: str) -> None:
             body = html.encode("utf-8")
             self.send_response(status)
@@ -238,7 +244,7 @@ def _make_oauth_handler(state: OAuthState) -> type[BaseHTTPRequestHandler]:
             if has_auth_payload and state.payload is None:
                 state.payload = query
                 state.event.set()
-            self._write_html(200, LOGIN_COMPLETE_PAGE)
+            self._write_html(200, self.build_completion_html(query))
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
