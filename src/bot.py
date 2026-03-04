@@ -4,7 +4,10 @@ Discord Bot Main Module
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import discord
@@ -28,6 +31,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+DEPLOY_NOTICE_METADATA_KEY = "last_deploy_notice_version"
 
 
 class QualityBot(commands.Bot):
@@ -102,6 +107,9 @@ class QualityBot(commands.Bot):
                     channel_count += 1
         logger.info(f"Synced {channel_count} channels across {len(self.guilds)} guilds")
 
+        # デプロイ更新通知（同じバージョンでは1回だけ）
+        await self._notify_deploy_update_once()
+
         # 週間リセットタスクを開始
         if not self.check_weekly_reset.is_running():
             self.check_weekly_reset.start()
@@ -111,6 +119,98 @@ class QualityBot(commands.Bot):
         logger.info("Shutting down bot...")
         self.check_weekly_reset.cancel()
         await super().close()
+
+    def _release_fingerprint_from_files(self) -> str | None:
+        """
+        環境変数でリリースIDが取れない場合のフォールバック。
+        同一コードでは同一値を返すため、再起動時の重複通知を防げる。
+        """
+        root = Path(__file__).resolve().parents[1]
+        targets = [
+            "main.py",
+            "src/bot.py",
+            "src/storage.py",
+            "src/database.py",
+            "requirements.txt",
+        ]
+        h = hashlib.sha256()
+        used = 0
+        for rel in targets:
+            p = root / rel
+            if not p.exists():
+                continue
+            try:
+                h.update(rel.encode("utf-8"))
+                h.update(b"\0")
+                h.update(p.read_bytes())
+                h.update(b"\0")
+                used += 1
+            except OSError:
+                continue
+        if used == 0:
+            return None
+        return f"code:{h.hexdigest()[:16]}"
+
+    def _get_release_version(self) -> str | None:
+        # 明示指定を最優先。CI/CD から与える想定。
+        for key in ("BOT_RELEASE_VERSION", "RELEASE_VERSION", "SOURCE_VERSION"):
+            value = os.getenv(key, "").strip()
+            if value:
+                return value
+
+        # Fly.io runtime 情報があれば使用。
+        for key in ("FLY_IMAGE_REF", "FLY_MACHINE_VERSION"):
+            value = os.getenv(key, "").strip()
+            if value:
+                return value
+
+        # 最後の手段としてコード指紋を使用。
+        return self._release_fingerprint_from_files()
+
+    async def _notify_deploy_update_once(self) -> None:
+        if not config.discord.notification_channel_id:
+            return
+
+        release_version = self._get_release_version()
+        if not release_version:
+            logger.info("Skip deploy notice: release version is unavailable.")
+            return
+
+        last_version = await storage.get_metadata(DEPLOY_NOTICE_METADATA_KEY)
+        if last_version == release_version:
+            return
+
+        claimed = await storage.compare_and_set_metadata(
+            key=DEPLOY_NOTICE_METADATA_KEY,
+            expected_value=last_version,
+            new_value=release_version,
+        )
+        if not claimed:
+            logger.info("Deploy notice already sent by another worker for version=%s", release_version)
+            return
+
+        try:
+            channel_id = int(config.discord.notification_channel_id)
+            channel = self.get_channel(channel_id)
+            if not channel:
+                logger.warning(f"Notification channel {channel_id} not found")
+                return
+
+            embed = discord.Embed(
+                title="✅ Botアップデート反映",
+                description=(
+                    "新しいバージョンを反映しました。\n"
+                    f"release: `{release_version[:80]}`"
+                ),
+                color=EmbedColors.INFO,
+                timestamp=datetime.now(timezone.utc),
+            )
+            await channel.send(embed=embed)
+            logger.info("Sent deploy update notice to channel %s (release=%s)", channel_id, release_version)
+        except ValueError:
+            logger.error("Invalid notification channel ID")
+        except Exception as e:
+            logger.error(f"Failed to send deploy update notice: {e}")
 
     @tasks.loop(minutes=60)
     async def check_weekly_reset(self) -> None:
