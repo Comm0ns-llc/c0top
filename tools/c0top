@@ -5,9 +5,9 @@ from pathlib import Path
 
 # Add the project root to sys.path so we can import src.tui_auth
 project_root = Path(__file__).parent.parent.resolve()
-sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "src"))
 
-from src.tui_auth import ensure_tui_auth_session, AuthError
+from tui_auth import ensure_tui_auth_session, AuthError
 
 # =====================================================================
 # Configuration
@@ -25,7 +25,7 @@ def main():
     
     # If the user hasn't configured the script, try to see if they have a .env file locally as fallback
     if "your-project.supabase.co" in url or "your_supabase_anon_key_here" in key:
-        from src.tui_auth import _load_dotenv_simple
+        from tui_auth import _load_dotenv_simple
         _load_dotenv_simple()
         url = os.environ.get("SUPABASE_URL", url)
         # SUPABASE_ANON_KEY is best, but fallback to SUPABASE_AUTH_KEY or SUPABASE_KEY
