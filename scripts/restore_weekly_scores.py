@@ -2,10 +2,12 @@
 import asyncio
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client
 
-load_dotenv()
+project_root = Path(__file__).parent.parent
+load_dotenv(project_root / ".env")
 
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_KEY")

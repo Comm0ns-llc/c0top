@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 # 環境変数をロード
-load_dotenv()
+from pathlib import Path
+project_root = Path(__file__).parent.parent
+load_dotenv(project_root / ".env")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")

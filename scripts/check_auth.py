@@ -2,11 +2,12 @@ import os
 import sys
 from supabase import create_client, Client
 
-if not os.path.exists(".env"):
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+if not os.path.exists(env_path):
     print("No .env found", file=sys.stderr)
     sys.exit(1)
 
-with open(".env") as f:
+with open(env_path) as f:
     env = dict(line.strip().split("=", 1) for line in f if "=" in line and not line.startswith("#"))
 
 url = env.get("SUPABASE_URL")
